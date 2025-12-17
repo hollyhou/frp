@@ -259,7 +259,7 @@ func (rp *HTTPReverseProxy) connectHandler(rw http.ResponseWriter, req *http.Req
 	remote, err := rp.CreateConnection(req.Context().Value(RouteInfoKey).(*RequestRouteInfo), false)
 	if err != nil {
 		_ = NotFoundResponse().Write(client)
-		client.Close()
+		_ = client.Close()
 		return
 	}
 	_ = req.Write(remote)
@@ -308,10 +308,10 @@ func (rp *HTTPReverseProxy) injectRequestInfoToCtx(req *http.Request) *http.Requ
 	originalHost, _ := httppkg.CanonicalHost(reqRouteInfo.Host)
 	rc := rp.GetRouteConfig(originalHost, reqRouteInfo.URL, reqRouteInfo.HTTPUser)
 
-	newctx := req.Context()
-	newctx = context.WithValue(newctx, RouteInfoKey, reqRouteInfo)
-	newctx = context.WithValue(newctx, RouteConfigKey, rc)
-	return req.Clone(newctx)
+	newCtx := req.Context()
+	newCtx = context.WithValue(newCtx, RouteInfoKey, reqRouteInfo)
+	newCtx = context.WithValue(newCtx, RouteConfigKey, rc)
+	return req.Clone(newCtx)
 }
 
 func (rp *HTTPReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
@@ -324,10 +324,10 @@ func (rp *HTTPReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	newreq := rp.injectRequestInfoToCtx(req)
+	newReq := rp.injectRequestInfoToCtx(req)
 	if req.Method == http.MethodConnect {
-		rp.connectHandler(rw, newreq)
+		rp.connectHandler(rw, newReq)
 	} else {
-		rp.proxy.ServeHTTP(rw, newreq)
+		rp.proxy.ServeHTTP(rw, newReq)
 	}
 }

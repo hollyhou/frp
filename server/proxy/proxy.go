@@ -40,6 +40,8 @@ import (
 	"github.com/fatedier/frp/server/metrics"
 )
 
+var hollyMemStore *bigcache.BigCache
+
 var proxyFactoryRegistry = map[reflect.Type]func(*BaseProxy) Proxy{}
 
 func RegisterProxyFactory(proxyConfType reflect.Type, factory func(*BaseProxy) Proxy) {
@@ -74,8 +76,6 @@ type BaseProxy struct {
 	userInfo      plugin.UserInfo
 	loginMsg      *msg.Login
 	configurer    v1.ProxyConfigurer
-	// blackCache 120秒内重复链接，则直接拉入黑名单
-	blackCache *bigcache.BigCache
 
 	mu  sync.RWMutex
 	xl  *xlog.Logger
@@ -206,15 +206,20 @@ func (pxy *BaseProxy) startCommonTCPListenersHandler() {
 					return
 				}
 				xl.Infof("get a user connection [%s]", c.RemoteAddr().String())
-				// 若120秒内重复链接，则直接拒绝
-
-				if pxy.checkBlack(c.RemoteAddr().String()) {
-					xl.Warnf("user tcp connection [%s] is repeated, close it", c.RemoteAddr().String())
+				// 1.客户端请求地址
+				clientAddress := c.RemoteAddr().String()
+				flag, count, err := checkNoThanLimit(clientAddress)
+				// 2.超过请求次数处理
+				if !flag {
+					xl.Warnf("user tcp connection [%s] is repeated,times [%d], close it",
+						clientAddress, count)
 					_ = c.Close()
 					continue
 				}
-				pxy.writeBlack(c.RemoteAddr().String())
 
+				// 3.没有请求或未超次数，则写入黑名单
+				xl.Infof("write black [%s]", clientAddress)
+				pushBlackList(clientAddress, count)
 				go pxy.handleUserTCPConnection(c)
 			}
 		}(listener)
@@ -224,7 +229,9 @@ func (pxy *BaseProxy) startCommonTCPListenersHandler() {
 // HandleUserTCPConnection is used for incoming user TCP connections.
 func (pxy *BaseProxy) handleUserTCPConnection(userConn net.Conn) {
 	xl := xlog.FromContextSafe(pxy.Context())
-	defer userConn.Close()
+	defer func(userConn net.Conn) {
+		_ = userConn.Close()
+	}(userConn)
 
 	serverCfg := pxy.serverCfg
 	cfg := pxy.configurer.GetBaseConfig()
@@ -319,7 +326,6 @@ func NewProxy(ctx context.Context, options *Options) (pxy Proxy, err error) {
 		userInfo:      options.UserInfo,
 		loginMsg:      options.LoginMsg,
 		configurer:    configurer,
-		blackCache:    setBlankCache(ctx),
 	}
 
 	factory := proxyFactoryRegistry[reflect.TypeOf(configurer)]
@@ -334,35 +340,42 @@ func NewProxy(ctx context.Context, options *Options) (pxy Proxy, err error) {
 }
 
 // 初始化黑名单
-func setBlankCache(ctx context.Context) *bigcache.BigCache {
-	config := bigcache.DefaultConfig(time.Second * 120)
-	cache, err := bigcache.New(ctx, config)
-	if err != nil {
-		return nil
+// 缓存IP地址，规定120秒内，同一个IP地址重复链接超过5次，则直接拒绝
+func setBlankCache(ctx context.Context) {
+	config := bigcache.Config{
+		Shards:             1024,
+		LifeWindow:         120 * time.Second,
+		CleanWindow:        60 * time.Second,
+		MaxEntriesInWindow: 1000 * 10 * 60,
+		MaxEntrySize:       500,
+		Verbose:            false,
 	}
-	return cache
-}
-
-func (pxy *BaseProxy) checkBlack(remoteAddr string) bool {
-	if pxy.blackCache == nil {
-		return false
-	}
-	item, _ := pxy.blackCache.Get(remoteAddr)
-	if item != nil && len(item) > 0 {
-		return true
-	}
-	return false
-}
-
-func (pxy *BaseProxy) writeBlack(remoteAddr string) {
-	if pxy.blackCache == nil {
+	hollyMemStore, _ = bigcache.New(ctx, config)
+	if hollyMemStore == nil {
+		xlog.FromContextSafe(ctx).Errorf("create black cache error")
 		return
 	}
-	err := pxy.blackCache.Set(remoteAddr,
-		[]byte(remoteAddr))
+}
+
+// 检查黑名单
+// 规定120秒内,同一个IP地址重复链接超过5次，则直接拒绝
+func checkNoThanLimit(remoteAddr string) (bool, int, error) {
+	// 检查缓存是否存在
+	// 若是不存在，则返回true，表示没有请求过
+	countValue, err := hollyMemStore.Get(remoteAddr)
 	if err != nil {
-		return
+		return true, 0, nil
 	}
+	count, _ := strconv.Atoi(string(countValue))
+	if count > 5 {
+		return false, count, fmt.Errorf("repeated connection is out five times")
+	}
+	return true, count, nil
+}
+
+// 写入黑名单
+func pushBlackList(remoteAddr string, counts int) {
+	_ = hollyMemStore.Set(remoteAddr, []byte(strconv.Itoa(counts+1)))
 }
 
 type Manager struct {
