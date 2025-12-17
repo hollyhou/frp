@@ -20,10 +20,12 @@ import (
 	"io"
 	"net"
 	"reflect"
+
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/allegro/bigcache/v3"
 	libio "github.com/fatedier/golib/io"
 	"golang.org/x/time/rate"
 
@@ -72,6 +74,8 @@ type BaseProxy struct {
 	userInfo      plugin.UserInfo
 	loginMsg      *msg.Login
 	configurer    v1.ProxyConfigurer
+	// blackCache 120秒内重复链接，则直接拉入黑名单
+	blackCache *bigcache.BigCache
 
 	mu  sync.RWMutex
 	xl  *xlog.Logger
@@ -202,6 +206,15 @@ func (pxy *BaseProxy) startCommonTCPListenersHandler() {
 					return
 				}
 				xl.Infof("get a user connection [%s]", c.RemoteAddr().String())
+				// 若120秒内重复链接，则直接拒绝
+
+				if pxy.checkBlack(c.RemoteAddr().String()) {
+					xl.Warnf("user tcp connection [%s] is repeated, close it", c.RemoteAddr().String())
+					_ = c.Close()
+					continue
+				}
+				pxy.writeBlack(c.RemoteAddr().String())
+
 				go pxy.handleUserTCPConnection(c)
 			}
 		}(listener)
@@ -234,7 +247,9 @@ func (pxy *BaseProxy) handleUserTCPConnection(userConn net.Conn) {
 	if err != nil {
 		return
 	}
-	defer workConn.Close()
+	defer func(workConn net.Conn) {
+		_ = workConn.Close()
+	}(workConn)
 
 	var local io.ReadWriteCloser = workConn
 	xl.Tracef("handler user tcp connection, use_encryption: %t, use_compression: %t",
@@ -304,6 +319,7 @@ func NewProxy(ctx context.Context, options *Options) (pxy Proxy, err error) {
 		userInfo:      options.UserInfo,
 		loginMsg:      options.LoginMsg,
 		configurer:    configurer,
+		blackCache:    setBlankCache(ctx),
 	}
 
 	factory := proxyFactoryRegistry[reflect.TypeOf(configurer)]
@@ -315,6 +331,38 @@ func NewProxy(ctx context.Context, options *Options) (pxy Proxy, err error) {
 		return nil, fmt.Errorf("proxy not created")
 	}
 	return pxy, nil
+}
+
+// 初始化黑名单
+func setBlankCache(ctx context.Context) *bigcache.BigCache {
+	config := bigcache.DefaultConfig(time.Second * 120)
+	cache, err := bigcache.New(ctx, config)
+	if err != nil {
+		return nil
+	}
+	return cache
+}
+
+func (pxy *BaseProxy) checkBlack(remoteAddr string) bool {
+	if pxy.blackCache == nil {
+		return false
+	}
+	item, _ := pxy.blackCache.Get(remoteAddr)
+	if item != nil && len(item) > 0 {
+		return true
+	}
+	return false
+}
+
+func (pxy *BaseProxy) writeBlack(remoteAddr string) {
+	if pxy.blackCache == nil {
+		return
+	}
+	err := pxy.blackCache.Set(remoteAddr,
+		[]byte(remoteAddr))
+	if err != nil {
+		return
+	}
 }
 
 type Manager struct {

@@ -96,7 +96,9 @@ func RegisterProxyFlags(cmd *cobra.Command, c v1.ProxyConfigurer, opts ...Regist
 	}
 }
 
-func registerProxyBaseConfigFlags(cmd *cobra.Command, c *v1.ProxyBaseConfig, opts ...RegisterFlagOption) {
+func registerProxyBaseConfigFlags(cmd *cobra.Command,
+	c *v1.ProxyBaseConfig,
+	opts ...RegisterFlagOption) {
 	if c == nil {
 		return
 	}

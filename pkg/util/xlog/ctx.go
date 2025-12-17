@@ -24,7 +24,8 @@ const (
 	xlogKey key = 0
 )
 
-func NewContext(ctx context.Context, xl *Logger) context.Context {
+func NewContext(ctx context.Context,
+	xl *Logger) context.Context {
 	return context.WithValue(ctx, xlogKey, xl)
 }
 

@@ -419,7 +419,9 @@ func (svr *Service) Close() error {
 	return nil
 }
 
-func (svr *Service) handleConnection(ctx context.Context, conn net.Conn, internal bool) {
+func (svr *Service) handleConnection(ctx context.Context,
+	conn net.Conn,
+	internal bool) {
 	xl := xlog.FromContextSafe(ctx)
 
 	var (
