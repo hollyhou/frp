@@ -118,7 +118,7 @@ func (pxy *BaseProxy) Close() {
 	xl := xlog.FromContextSafe(pxy.ctx)
 	xl.Infof("proxy closing")
 	for _, l := range pxy.listeners {
-		l.Close()
+		_ = l.Close()
 	}
 }
 
@@ -163,7 +163,7 @@ func (pxy *BaseProxy) GetWorkConnFromPool(src, dst net.Addr) (workConn net.Conn,
 		})
 		if err != nil {
 			xl.Warnf("failed to send message to work connection from pool: %v, times: %d", err, i)
-			workConn.Close()
+			_ = workConn.Close()
 		} else {
 			break
 		}
@@ -306,6 +306,9 @@ type Options struct {
 func NewProxy(ctx context.Context, options *Options) (pxy Proxy, err error) {
 	configurer := options.Configurer
 	xl := xlog.FromContextSafe(ctx).Spawn().AppendPrefix(configurer.GetBaseConfig().Name)
+
+	// 初始化限制频率缓存
+	setBlankCache(ctx)
 
 	var limiter *rate.Limiter
 	limitBytes := configurer.GetBaseConfig().Transport.BandwidthLimit.Bytes()
