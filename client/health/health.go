@@ -160,7 +160,7 @@ func (monitor *Monitor) doTCPCheck(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	conn.Close()
+	_ = conn.Close()
 	return nil
 }
 
@@ -175,11 +175,14 @@ func (monitor *Monitor) doHTTPCheck(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		_ = Body.Close()
+	}(resp.Body)
 	_, _ = io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("do http health check, StatusCode is [%d] not 2xx", resp.StatusCode)
+		return fmt.Errorf("do http health check, StatusCode is [%d] not 2xx",
+			resp.StatusCode)
 	}
 	return nil
 }

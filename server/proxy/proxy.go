@@ -217,7 +217,6 @@ func (pxy *BaseProxy) startCommonTCPListenersHandler() {
 					return
 				}
 				xl.Infof("get a user connection [%s]", c.RemoteAddr().String())
-
 				// Rate limiting check
 				if pxy.enableRateLimit {
 					clientAddress := c.RemoteAddr().String()
@@ -228,7 +227,7 @@ func (pxy *BaseProxy) startCommonTCPListenersHandler() {
 						xl.Warnf("user connection [%s] rejected: rate limit exceeded",
 							clientAddress)
 						_ = c.Close()
-						continue
+						return
 					}
 
 					// 2. Check concurrent connection limit
@@ -236,7 +235,7 @@ func (pxy *BaseProxy) startCommonTCPListenersHandler() {
 						xl.Warnf("user connection [%s] rejected: concurrent connection limit exceeded",
 							clientAddress)
 						_ = c.Close()
-						continue
+						return
 					}
 
 					// 3. Increment rate counter
@@ -248,6 +247,7 @@ func (pxy *BaseProxy) startCommonTCPListenersHandler() {
 						pxy.handleUserTCPConnection(c)
 					}()
 				} else {
+
 					go pxy.handleUserTCPConnection(c)
 				}
 			}
@@ -279,7 +279,8 @@ func (pxy *BaseProxy) handleUserTCPConnection(userConn net.Conn) {
 	}
 
 	// try all connections from the pool
-	workConn, err := pxy.GetWorkConnFromPool(userConn.RemoteAddr(), userConn.LocalAddr())
+	workConn, err := pxy.GetWorkConnFromPool(userConn.RemoteAddr(),
+		userConn.LocalAddr())
 	if err != nil {
 		return
 	}
@@ -312,8 +313,11 @@ func (pxy *BaseProxy) handleUserTCPConnection(userConn net.Conn) {
 			})
 	}
 
-	xl.Debugf("join connections, workConn(l[%s] r[%s]) userConn(l[%s] r[%s])", workConn.LocalAddr().String(),
-		workConn.RemoteAddr().String(), userConn.LocalAddr().String(), userConn.RemoteAddr().String())
+	xl.Debugf("join connections, workConn(l[%s] r[%s]) userConn(l[%s] r[%s])",
+		workConn.LocalAddr().String(),
+		workConn.RemoteAddr().String(),
+		userConn.LocalAddr().String(),
+		userConn.RemoteAddr().String())
 
 	name := pxy.GetName()
 	proxyType := cfg.Type
@@ -440,7 +444,8 @@ func incrementRateCounter(clientIP string) {
 
 // acquireConcurrentSlot tries to acquire a concurrent connection slot for the IP
 // Returns true if successful, false if limit exceeded
-func acquireConcurrentSlot(clientIP string, xl *xlog.Logger) bool {
+func acquireConcurrentSlot(clientIP string,
+	xl *xlog.Logger) bool {
 	concurrentConnMutex.Lock()
 	defer concurrentConnMutex.Unlock()
 

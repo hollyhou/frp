@@ -44,10 +44,10 @@ import (
 func init() {
 	crypto.DefaultSalt = "frp"
 	// Disable quic-go's receive buffer warning.
-	os.Setenv("QUIC_GO_DISABLE_RECEIVE_BUFFER_WARNING", "true")
+	_ = os.Setenv("QUIC_GO_DISABLE_RECEIVE_BUFFER_WARNING", "true")
 	// Disable quic-go's ECN support by default. It may cause issues on certain operating systems.
 	if os.Getenv("QUIC_GO_DISABLE_ECN") == "" {
-		os.Setenv("QUIC_GO_DISABLE_ECN", "true")
+		_ = os.Setenv("QUIC_GO_DISABLE_ECN", "true")
 	}
 }
 
@@ -272,7 +272,7 @@ func (svr *Service) login() (conn net.Conn, connector Connector, err error) {
 
 	defer func() {
 		if err != nil {
-			connector.Close()
+			_ = connector.Close()
 		}
 	}()
 
@@ -356,7 +356,7 @@ func (svr *Service) loopLoginUntilSuccess(maxInterval time.Duration, firstLoginE
 		}
 		ctl, err := NewControl(svr.ctx, sessionCtx)
 		if err != nil {
-			conn.Close()
+			_ = conn.Close()
 			xl.Errorf("new control error: %v", err)
 			return false, err
 		}
@@ -366,7 +366,7 @@ func (svr *Service) loopLoginUntilSuccess(maxInterval time.Duration, firstLoginE
 		// close and replace previous control
 		svr.ctlMu.Lock()
 		if svr.ctl != nil {
-			svr.ctl.Close()
+			_ = svr.ctl.Close()
 		}
 		svr.ctl = ctl
 		svr.ctlMu.Unlock()
@@ -412,11 +412,11 @@ func (svr *Service) stop() {
 	svr.ctlMu.Lock()
 	defer svr.ctlMu.Unlock()
 	if svr.ctl != nil {
-		svr.ctl.GracefulClose(svr.gracefulShutdownDuration)
+		_ = svr.ctl.GracefulClose(svr.gracefulShutdownDuration)
 		svr.ctl = nil
 	}
 	if svr.webServer != nil {
-		svr.webServer.Close()
+		_ = svr.webServer.Close()
 		svr.webServer = nil
 	}
 }
