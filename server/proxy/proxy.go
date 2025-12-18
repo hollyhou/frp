@@ -360,7 +360,7 @@ func NewProxy(ctx context.Context, options *Options) (pxy Proxy, err error) {
 		getWorkConnFn:   options.GetWorkConnFn,
 		serverCfg:       options.ServerCfg,
 		limiter:         limiter,
-		enableRateLimit: true, // Enable rate limiting by default
+		enableRateLimit: false, // Enable rate limiting by default
 		xl:              xl,
 		ctx:             xlog.NewContext(ctx, xl),
 		userInfo:        options.UserInfo,
