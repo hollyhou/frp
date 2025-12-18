@@ -478,34 +478,34 @@ func releaseConcurrentSlot(clientIP string) {
 
 // SetRateLimitConfig sets the global rate limiting configuration
 // This should be called during server initialization
-func SetRateLimitConfig(maxConns int,
-	windowDuration time.Duration,
-	maxConcurrent int) {
-	if maxConns > 0 {
-		maxConnectionsPerIP = maxConns
-	}
-	if windowDuration > 0 {
-		rateWindowDuration = windowDuration
-	}
-	if maxConcurrent > 0 {
-		maxConcurrentPerIP = maxConcurrent
-	}
-}
+//func SetRateLimitConfig(maxConns int,
+//	windowDuration time.Duration,
+//	maxConcurrent int) {
+//	if maxConns > 0 {
+//		maxConnectionsPerIP = maxConns
+//	}
+//	if windowDuration > 0 {
+//		rateWindowDuration = windowDuration
+//	}
+//	if maxConcurrent > 0 {
+//		maxConcurrentPerIP = maxConcurrent
+//	}
+//}
 
 // GetRateLimitStats returns current rate limiting statistics for an IP
-func GetRateLimitStats(clientIP string) (connectionCount int, concurrentCount int) {
-	if hollyMemStore != nil {
-		if countValue, err := hollyMemStore.Get(clientIP); err == nil {
-			connectionCount, _ = strconv.Atoi(string(countValue))
-		}
-	}
-
-	concurrentConnMutex.RLock()
-	concurrentCount = concurrentConnTracker[clientIP]
-	concurrentConnMutex.RUnlock()
-
-	return
-}
+//func GetRateLimitStats(clientIP string) (connectionCount int, concurrentCount int) {
+//	if hollyMemStore != nil {
+//		if countValue, err := hollyMemStore.Get(clientIP); err == nil {
+//			connectionCount, _ = strconv.Atoi(string(countValue))
+//		}
+//	}
+//
+//	concurrentConnMutex.RLock()
+//	concurrentCount = concurrentConnTracker[clientIP]
+//	concurrentConnMutex.RUnlock()
+//
+//	return
+//}
 
 type Manager struct {
 	// proxies indexed by proxy name
