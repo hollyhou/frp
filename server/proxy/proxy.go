@@ -40,7 +40,15 @@ import (
 	"github.com/fatedier/frp/server/metrics"
 )
 
-var hollyMemStore *bigcache.BigCache
+var (
+	hollyMemStore *bigcache.BigCache
+	// Rate limiting configuration
+	maxConnectionsPerIP   = 5
+	rateWindowDuration    = 120 * time.Second
+	maxConcurrentPerIP    = 3
+	concurrentConnTracker = make(map[string]int)
+	concurrentConnMutex   sync.RWMutex
+)
 
 var proxyFactoryRegistry = map[reflect.Type]func(*BaseProxy) Proxy{}
 
@@ -76,6 +84,9 @@ type BaseProxy struct {
 	userInfo      plugin.UserInfo
 	loginMsg      *msg.Login
 	configurer    v1.ProxyConfigurer
+
+	// Rate limiting fields
+	enableRateLimit bool
 
 	mu  sync.RWMutex
 	xl  *xlog.Logger
@@ -206,21 +217,39 @@ func (pxy *BaseProxy) startCommonTCPListenersHandler() {
 					return
 				}
 				xl.Infof("get a user connection [%s]", c.RemoteAddr().String())
-				// 1.客户端请求地址
-				clientAddress := c.RemoteAddr().String()
-				flag, count, err := checkNoThanLimit(clientAddress)
-				// 2.超过请求次数处理
-				if !flag {
-					xl.Warnf("user tcp connection [%s] is repeated,times [%d], close it",
-						clientAddress, count)
-					_ = c.Close()
-					continue
-				}
 
-				// 3.没有请求或未超次数，则写入黑名单
-				xl.Infof("write black [%s]", clientAddress)
-				pushBlackList(clientAddress, count)
-				go pxy.handleUserTCPConnection(c)
+				// Rate limiting check
+				if pxy.enableRateLimit {
+					clientAddress := c.RemoteAddr().String()
+					clientIP, _, _ := net.SplitHostPort(clientAddress)
+
+					// 1. Check connection rate limit
+					if !checkConnectionRateLimit(clientIP, xl) {
+						xl.Warnf("user connection [%s] rejected: rate limit exceeded",
+							clientAddress)
+						_ = c.Close()
+						continue
+					}
+
+					// 2. Check concurrent connection limit
+					if !acquireConcurrentSlot(clientIP, xl) {
+						xl.Warnf("user connection [%s] rejected: concurrent connection limit exceeded",
+							clientAddress)
+						_ = c.Close()
+						continue
+					}
+
+					// 3. Increment rate counter
+					incrementRateCounter(clientIP)
+
+					// 4. Handle user connection
+					go func() {
+						defer releaseConcurrentSlot(clientIP)
+						pxy.handleUserTCPConnection(c)
+					}()
+				} else {
+					go pxy.handleUserTCPConnection(c)
+				}
 			}
 		}(listener)
 	}
@@ -275,9 +304,12 @@ func (pxy *BaseProxy) handleUserTCPConnection(userConn net.Conn) {
 	}
 
 	if pxy.GetLimiter() != nil {
-		local = libio.WrapReadWriteCloser(limit.NewReader(local, pxy.GetLimiter()), limit.NewWriter(local, pxy.GetLimiter()), func() error {
-			return local.Close()
-		})
+		local = libio.WrapReadWriteCloser(limit.NewReader(local,
+			pxy.GetLimiter()),
+			limit.NewWriter(local, pxy.GetLimiter()),
+			func() error {
+				return local.Close()
+			})
 	}
 
 	xl.Debugf("join connections, workConn(l[%s] r[%s]) userConn(l[%s] r[%s])", workConn.LocalAddr().String(),
@@ -317,18 +349,19 @@ func NewProxy(ctx context.Context, options *Options) (pxy Proxy, err error) {
 	}
 
 	basePxy := BaseProxy{
-		name:          configurer.GetBaseConfig().Name,
-		rc:            options.ResourceController,
-		listeners:     make([]net.Listener, 0),
-		poolCount:     options.PoolCount,
-		getWorkConnFn: options.GetWorkConnFn,
-		serverCfg:     options.ServerCfg,
-		limiter:       limiter,
-		xl:            xl,
-		ctx:           xlog.NewContext(ctx, xl),
-		userInfo:      options.UserInfo,
-		loginMsg:      options.LoginMsg,
-		configurer:    configurer,
+		name:            configurer.GetBaseConfig().Name,
+		rc:              options.ResourceController,
+		listeners:       make([]net.Listener, 0),
+		poolCount:       options.PoolCount,
+		getWorkConnFn:   options.GetWorkConnFn,
+		serverCfg:       options.ServerCfg,
+		limiter:         limiter,
+		enableRateLimit: true, // Enable rate limiting by default
+		xl:              xl,
+		ctx:             xlog.NewContext(ctx, xl),
+		userInfo:        options.UserInfo,
+		loginMsg:        options.LoginMsg,
+		configurer:      configurer,
 	}
 
 	factory := proxyFactoryRegistry[reflect.TypeOf(configurer)]
@@ -342,12 +375,12 @@ func NewProxy(ctx context.Context, options *Options) (pxy Proxy, err error) {
 	return pxy, nil
 }
 
-// 初始化黑名单
-// 缓存IP地址，规定120秒内，同一个IP地址重复链接超过5次，则直接拒绝
+// 初始化速率限制缓存
+// 使用bigcache缓存IP地址的连接次数，在配置的时间窗口内限制连接数
 func setBlankCache(ctx context.Context) {
 	config := bigcache.Config{
 		Shards:             1024,
-		LifeWindow:         120 * time.Second,
+		LifeWindow:         rateWindowDuration,
 		CleanWindow:        60 * time.Second,
 		MaxEntriesInWindow: 1000 * 10 * 60,
 		MaxEntrySize:       500,
@@ -355,30 +388,118 @@ func setBlankCache(ctx context.Context) {
 	}
 	hollyMemStore, _ = bigcache.New(ctx, config)
 	if hollyMemStore == nil {
-		xlog.FromContextSafe(ctx).Errorf("create black cache error")
+		xlog.FromContextSafe(ctx).Errorf("failed to create rate limit cache")
 		return
 	}
+	xlog.FromContextSafe(ctx).Infof("rate limiting initialized: max %d connections per IP in %v window, max %d concurrent",
+		maxConnectionsPerIP, rateWindowDuration, maxConcurrentPerIP)
 }
 
-// 检查黑名单
-// 规定120秒内,同一个IP地址重复链接超过5次，则直接拒绝
-func checkNoThanLimit(remoteAddr string) (bool, int, error) {
-	// 检查缓存是否存在
-	// 若是不存在，则返回true，表示没有请求过
-	countValue, err := hollyMemStore.Get(remoteAddr)
+// checkConnectionRateLimit checks if the IP has exceeded the connection rate limit
+// Returns true if the connection is allowed, false otherwise
+func checkConnectionRateLimit(clientIP string, xl *xlog.Logger) bool {
+	if hollyMemStore == nil {
+		return true
+	}
+
+	countValue, err := hollyMemStore.Get(clientIP)
 	if err != nil {
-		return true, 0, nil
+		// First connection from this IP in the time window
+		return true
 	}
-	count, _ := strconv.Atoi(string(countValue))
-	if count > 5 {
-		return false, count, fmt.Errorf("repeated connection is out five times")
+
+	count, err := strconv.Atoi(string(countValue))
+	if err != nil {
+		xl.Warnf("failed to parse connection count for IP %s: %v", clientIP, err)
+		return true
 	}
-	return true, count, nil
+
+	if count >= maxConnectionsPerIP {
+		xl.Warnf("IP [%s] exceeded rate limit: %d/%d connections in %v",
+			clientIP, count, maxConnectionsPerIP, rateWindowDuration)
+		return false
+	}
+
+	return true
 }
 
-// 写入黑名单
-func pushBlackList(remoteAddr string, counts int) {
-	_ = hollyMemStore.Set(remoteAddr, []byte(strconv.Itoa(counts+1)))
+// incrementRateCounter increments the connection counter for the given IP
+func incrementRateCounter(clientIP string) {
+	if hollyMemStore == nil {
+		return
+	}
+
+	countValue, err := hollyMemStore.Get(clientIP)
+	var count int
+	if err == nil {
+		count, _ = strconv.Atoi(string(countValue))
+	}
+
+	_ = hollyMemStore.Set(clientIP, []byte(strconv.Itoa(count+1)))
+}
+
+// acquireConcurrentSlot tries to acquire a concurrent connection slot for the IP
+// Returns true if successful, false if limit exceeded
+func acquireConcurrentSlot(clientIP string, xl *xlog.Logger) bool {
+	concurrentConnMutex.Lock()
+	defer concurrentConnMutex.Unlock()
+
+	current := concurrentConnTracker[clientIP]
+	if current >= maxConcurrentPerIP {
+		xl.Warnf("IP [%s] exceeded concurrent connection limit: %d/%d",
+			clientIP, current, maxConcurrentPerIP)
+		return false
+	}
+
+	concurrentConnTracker[clientIP] = current + 1
+	xl.Debugf("IP [%s] concurrent connections: %d/%d",
+		clientIP, current+1, maxConcurrentPerIP)
+	return true
+}
+
+// releaseConcurrentSlot releases a concurrent connection slot for the IP
+func releaseConcurrentSlot(clientIP string) {
+	concurrentConnMutex.Lock()
+	defer concurrentConnMutex.Unlock()
+
+	if count, ok := concurrentConnTracker[clientIP]; ok {
+		if count <= 1 {
+			delete(concurrentConnTracker, clientIP)
+		} else {
+			concurrentConnTracker[clientIP] = count - 1
+		}
+	}
+}
+
+// SetRateLimitConfig sets the global rate limiting configuration
+// This should be called during server initialization
+func SetRateLimitConfig(maxConns int,
+	windowDuration time.Duration,
+	maxConcurrent int) {
+	if maxConns > 0 {
+		maxConnectionsPerIP = maxConns
+	}
+	if windowDuration > 0 {
+		rateWindowDuration = windowDuration
+	}
+	if maxConcurrent > 0 {
+		maxConcurrentPerIP = maxConcurrent
+	}
+}
+
+// GetRateLimitStats returns current rate limiting statistics for an IP
+func GetRateLimitStats(clientIP string) (connectionCount int, concurrentCount int) {
+	if hollyMemStore != nil {
+		if countValue, err := hollyMemStore.Get(clientIP); err == nil {
+			connectionCount, _ = strconv.Atoi(string(countValue))
+		}
+	}
+
+	concurrentConnMutex.RLock()
+	concurrentCount = concurrentConnTracker[clientIP]
+	concurrentConnMutex.RUnlock()
+
+	return
 }
 
 type Manager struct {
