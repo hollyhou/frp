@@ -99,6 +99,9 @@ type ServerConfig struct {
 	AllowPorts []types.PortsRange `json:"allowPorts,omitempty"`
 
 	HTTPPlugins []HTTPPluginOptions `json:"httpPlugins,omitempty"`
+
+	// RateLimit 限流配置
+	RateLimit RateLimitConfig `json:"rateLimit,omitempty"`
 }
 
 func (c *ServerConfig) Complete() error {
@@ -125,6 +128,7 @@ func (c *ServerConfig) Complete() error {
 	c.UserConnTimeout = util.EmptyOr(c.UserConnTimeout, 10)
 	c.UDPPacketSize = util.EmptyOr(c.UDPPacketSize, 1500)
 	c.NatHoleAnalysisDataReserveHours = util.EmptyOr(c.NatHoleAnalysisDataReserveHours, 7*24)
+	c.RateLimit.Complete()
 	return nil
 }
 
@@ -226,4 +230,32 @@ type SSHTunnelGateway struct {
 
 func (c *SSHTunnelGateway) Complete() {
 	c.AutoGenPrivateKeyPath = util.EmptyOr(c.AutoGenPrivateKeyPath, "./.autogen_ssh_key")
+}
+
+// RateLimitConfig 限流配置
+type RateLimitConfig struct {
+	// Enable 是否启用限流
+	Enable bool `json:"enable,omitempty"`
+	// WindowSize 时间窗口大小(秒)
+	WindowSize int64 `json:"windowSize,omitempty"`
+	// MaxConnectionsPerWindow 窗口内最大连接数
+	MaxConnectionsPerWindow int64 `json:"maxConnectionsPerWindow,omitempty"`
+	// MaxConcurrentConnections 最大并发连接数
+	MaxConcurrentConnections int64 `json:"maxConcurrentConnections,omitempty"`
+	// WhiteList IP 白名单 (CIDR 格式)
+	WhiteList []string `json:"whiteList,omitempty"`
+	// BlackList IP 黑名单 (CIDR 格式)
+	BlackList []string `json:"blackList,omitempty"`
+	// BlackListBanDuration 黑名单封禁时长(秒)
+	BlackListBanDuration int64 `json:"blackListBanDuration,omitempty"`
+}
+
+func (c *RateLimitConfig) Complete() {
+	// 设置默认值
+	if c.Enable {
+		c.WindowSize = util.EmptyOr(c.WindowSize, 60)
+		c.MaxConnectionsPerWindow = util.EmptyOr(c.MaxConnectionsPerWindow, 100)
+		c.MaxConcurrentConnections = util.EmptyOr(c.MaxConcurrentConnections, 10)
+		c.BlackListBanDuration = util.EmptyOr(c.BlackListBanDuration, 3600)
+	}
 }

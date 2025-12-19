@@ -167,3 +167,24 @@ name = "port-manager"
 addr = "127.0.0.1:9001"
 path = "/handler"
 ops = ["NewProxy"]
+
+# Rate limit configuration
+# Enable rate limiting for user connections based on IP address
+rateLimit.enable = true
+# Time window size in seconds for rate limiting (default: 60)
+rateLimit.windowSize = 60
+# Maximum number of connections per IP within the time window (default: 100)
+rateLimit.maxConnectionsPerWindow = 100
+# Maximum number of concurrent connections per IP (default: 10)
+rateLimit.maxConcurrentConnections = 10
+# IP whitelist (CIDR format), IPs in whitelist will bypass rate limiting
+rateLimit.whiteList = [
+  "192.168.1.0/24",
+  "10.0.0.1",
+]
+# IP blacklist (CIDR format), IPs in blacklist will be permanently denied
+rateLimit.blackList = [
+  "172.16.0.0/16",
+]
+# Ban duration in seconds for dynamically blacklisted IPs (default: 3600)
+rateLimit.blackListBanDuration = 3600
