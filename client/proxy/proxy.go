@@ -115,7 +115,7 @@ func (pxy *BaseProxy) Run() error {
 
 func (pxy *BaseProxy) Close() {
 	if pxy.proxyPlugin != nil {
-		pxy.proxyPlugin.Close()
+		_ = pxy.proxyPlugin.Close()
 	}
 }
 
@@ -142,9 +142,11 @@ func (pxy *BaseProxy) HandleTCPWorkConnection(workConn net.Conn, m *msg.StartWor
 	)
 	remote = workConn
 	if pxy.limiter != nil {
-		remote = libio.WrapReadWriteCloser(limit.NewReader(workConn, pxy.limiter), limit.NewWriter(workConn, pxy.limiter), func() error {
-			return workConn.Close()
-		})
+		remote = libio.WrapReadWriteCloser(limit.NewReader(workConn, pxy.limiter),
+			limit.NewWriter(workConn, pxy.limiter),
+			func() error {
+				return workConn.Close()
+			})
 	}
 
 	xl.Tracef("handle tcp work connection, useEncryption: %t, useCompression: %t",
@@ -152,7 +154,7 @@ func (pxy *BaseProxy) HandleTCPWorkConnection(workConn net.Conn, m *msg.StartWor
 	if baseCfg.Transport.UseEncryption {
 		remote, err = libio.WithEncryption(remote, encKey)
 		if err != nil {
-			workConn.Close()
+			_ = workConn.Close()
 			xl.Errorf("create encryption stream error: %v", err)
 			return
 		}
@@ -195,7 +197,7 @@ func (pxy *BaseProxy) HandleTCPWorkConnection(workConn net.Conn, m *msg.StartWor
 		libnet.WithTimeout(10*time.Second),
 	)
 	if err != nil {
-		workConn.Close()
+		_ = workConn.Close()
 		xl.Errorf("connect to local service [%s:%d] error: %v", baseCfg.LocalIP, baseCfg.LocalPort, err)
 		return
 	}
@@ -205,7 +207,7 @@ func (pxy *BaseProxy) HandleTCPWorkConnection(workConn net.Conn, m *msg.StartWor
 
 	if connInfo.ProxyProtocolHeader != nil {
 		if _, err := connInfo.ProxyProtocolHeader.WriteTo(localConn); err != nil {
-			workConn.Close()
+			_ = workConn.Close()
 			xl.Errorf("write proxy protocol header to local conn error: %v", err)
 			return
 		}

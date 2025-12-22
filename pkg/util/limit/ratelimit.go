@@ -242,7 +242,7 @@ func (r *RateLimiter) isInWhiteList(ip string) bool {
 	}
 
 	_, ok := lo.Find(r.whiteNets, func(ipNet *net.IPNet) bool {
-		return ipNet.IP.Equal(parsedIP)
+		return ipNet.Contains(parsedIP)
 	})
 
 	return ok
@@ -256,7 +256,7 @@ func (r *RateLimiter) isInStaticBlackList(ip string) bool {
 	}
 
 	_, ok := lo.Find(r.blackNets, func(ipNet *net.IPNet) bool {
-		return ipNet.IP.Equal(parsedIP)
+		return ipNet.Contains(parsedIP)
 	})
 	return ok
 }
