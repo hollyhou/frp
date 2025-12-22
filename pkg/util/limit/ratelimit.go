@@ -133,7 +133,8 @@ func parseIPList(configIpList []string) (ipNetList []*net.IPNet) {
 }
 
 // Allow 检查 IP 是否允许访问
-func (r *RateLimiter) Allow(remoteAddr string, xl *xlog.Logger) bool {
+func (r *RateLimiter) Allow(remoteAddr string,
+	xl *xlog.Logger) bool {
 	if r == nil {
 		return true
 	}
@@ -193,6 +194,12 @@ func (r *RateLimiter) AcquireConcurrentSlot(remoteAddr string,
 	ip := extractIP(remoteAddr)
 	if ip == "" {
 		return false
+	}
+
+	// 2.如果在白名单内，则直接返回true
+	if r.isInWhiteList(ip) {
+		xl.Debugf("IP [%s] is in whitelist, allowing", ip)
+		return true
 	}
 
 	r.concurrentConnectionLock.Lock()
